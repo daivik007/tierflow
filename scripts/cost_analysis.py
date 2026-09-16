@@ -23,7 +23,7 @@ import sys
 import csv
 
 # Add src to path so we can import the decision logic
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 try:
     from decide_storage_class import decide_storage_class
 except ImportError:
@@ -45,6 +45,14 @@ PRICING = {
     "STANDARD_IA": 0.0125,    # $0.0125 per GB (~45% cheaper than Standard)
     "GLACIER": 0.0036,        # $0.0036 per GB (~84% cheaper than Standard)
     "DEEP_ARCHIVE": 0.00099,  # $0.00099 per GB (~95% cheaper than Standard)
+}
+
+# Retrieval cost per GB (charged when you READ data back from cold tiers)
+RETRIEVAL_PRICING = {
+    "STANDARD":     0.000,   # Free
+    "STANDARD_IA":  0.010,   # $0.01/GB retrieved
+    "GLACIER":      0.010,   # $0.01/GB retrieved
+    "DEEP_ARCHIVE": 0.020,   # $0.02/GB retrieved
 }
 
 # AWS Intelligent-Tiering per-object monthly monitoring fee: $0.0025 per 10,000 objects
@@ -208,7 +216,7 @@ def main():
     print("   TIERFLOW: COST MODEL & PREDICTIVE SAVINGS ANALYSIS")
     print("=" * 75)
 
-    dataset_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "tierflow_simulated_logs.csv")
+    dataset_path = os.path.join(os.path.dirname(__file__), "..", "data", "tierflow_simulated_logs.csv")
     records = load_dataset(dataset_path)
 
     if not records:
@@ -246,8 +254,31 @@ def main():
     # --------------------------------------------------------------------------
     # Generate Charts for Slides
     # --------------------------------------------------------------------------
-    output_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "charts")
+    output_dir = os.path.join(os.path.dirname(__file__), "..", "data", "charts")
     generate_charts(counts, output_dir)
+
+    # --------------------------------------------------------------------------
+    # Break-Even Retrieval Cost Analysis
+    # --------------------------------------------------------------------------
+    print("\n[3] Break-Even Retrieval Cost Analysis (per GB stored @ 10 TB benchmark):")
+    print("-" * 75)
+    print(f"  {'Tier':<15} {'Storage/GB':<14} {'Retrieval/GB':<15} {'Break-even retrieval'}")
+    print(f"  {'-'*14} {'-'*13} {'-'*14} {'-'*25}")
+    for tier in ["STANDARD", "STANDARD_IA", "GLACIER", "DEEP_ARCHIVE"]:
+        store  = PRICING[tier]
+        ret    = RETRIEVAL_PRICING[tier]
+        saving = PRICING["STANDARD"] - store
+        # Break-even: how many GB retrieved per month makes this tier equal to STANDARD cost?
+        if ret > 0:
+            breakeven_gb = saving / ret
+            breakeven_str = f"{breakeven_gb:.1f} GB/month retrieved"
+        else:
+            breakeven_str = "Always cheaper (no retrieval cost)"
+        print(f"  {tier:<15} ${store:<13.5f} ${ret:<14.3f} {breakeven_str}")
+    print("-" * 75)
+    print("  Interpretation: If you retrieve MORE than the break-even amount,")
+    print("  the retrieval fees cancel out the storage savings — stay in STANDARD.")
+    print("=" * 75)
     print("\n[SUCCESS] Analysis complete.")
 
 

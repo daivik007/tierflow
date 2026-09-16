@@ -1,24 +1,36 @@
 import boto3
 import time
+import os
 
-def parse_real_s3_logs(database_name='tierflow_db', output_location='s3://tierflow-daivik-logs/athena-results/'):
+def parse_real_s3_logs(
+    database_name=None,
+    output_location=None
+):
     """
     Queries Athena for real S3 access logs and formats them to match
     the schema expected by decide_storage_class().
+
+    Config is read from environment variables so no values are hardcoded:
+        AWS_REGION            - defaults to ap-south-1
+        ATHENA_DATABASE       - defaults to tierflow_db
+        ATHENA_OUTPUT_LOCATION- defaults to s3://tierflow-daivik-logs/athena-results/
     """
-    athena_client = boto3.client('athena', region_name='ap-south-1')
+    region          = os.environ.get('AWS_REGION', 'ap-south-1')
+    database_name   = database_name   or os.environ.get('ATHENA_DATABASE', 'tierflow_db')
+    output_location = output_location or os.environ.get('ATHENA_OUTPUT_LOCATION', 's3://tierflow-daivik-logs/athena-results/')
+    athena_client   = boto3.client('athena', region_name=region)
     
     # The SQL query that extracts the exact metrics Daivik's logic requires
     query = """
         SELECT
-            regexp_extract(key, '^(.*?)/', 1) || '/' AS prefix,
+            regexp_extract(key, '^([^/]+/[^/]+)/', 1) || '/' AS prefix,
             date_diff('day', max(parse_datetime(requestdatetime, 'dd/MMM/yyyy:HH:mm:ss Z')), current_timestamp) AS last_accessed_days_ago,
             COUNT(CASE WHEN date_diff('day', parse_datetime(requestdatetime, 'dd/MMM/yyyy:HH:mm:ss Z'), current_timestamp) <= 30 THEN 1 END) AS access_count_30d
         FROM s3_access_logs
         WHERE operation = 'REST.GET.OBJECT'
           AND key IS NOT NULL
           AND key LIKE '%/%'
-        GROUP BY regexp_extract(key, '^(.*?)/')
+        GROUP BY regexp_extract(key, '^([^/]+/[^/]+)/')
     """
     
     print("Initiating Athena query...")
@@ -30,9 +42,13 @@ def parse_real_s3_logs(database_name='tierflow_db', output_location='s3://tierfl
     
     execution_id = response['QueryExecutionId']
     
-    # Wait for the serverless query to complete
+    # Wait for the serverless query to complete (timeout after 60 seconds)
     state = 'RUNNING'
+    start_time = time.time()
+    TIMEOUT_SECONDS = 60
     while state in ['RUNNING', 'QUEUED']:
+        if time.time() - start_time > TIMEOUT_SECONDS:
+            raise Exception(f"Athena query timed out after {TIMEOUT_SECONDS} seconds")
         time.sleep(2)
         status = athena_client.get_query_execution(QueryExecutionId=execution_id)
         state = status['QueryExecution']['Status']['State']
