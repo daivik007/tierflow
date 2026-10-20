@@ -1,23 +1,30 @@
-import boto3
+from athena_parser import parse_real_s3_logs
+from decide_storage_class import decide_storage_class
+# Assuming Daivik built a mover script, you'd import it here:
+from move_objects import copy_object_to_tier 
 
-s3_client = boto3.client('s3')
-BUCKET_NAME = 'tierflow-daivik-test'
+def lambda_handler(event, context):
+    print("Starting TierFlow Serverless Execution...")
+    
+    # 1. Fetch real access metrics using your Athena parser
+    real_metrics = parse_real_s3_logs()
+    
+    # 2. Process tiering decisions
+    for metric in real_metrics:
+        prefix = metric['prefix']
+        days_ago = metric['last_accessed_days_ago']
+        count_30d = metric['access_count_30d'] 
+        #days_ago = 180
+        #count_30d = 0 
 
-def copy_object_to_tier(prefix, target_tier):
-    print(f"Initiating move for {prefix} to {target_tier}...")
-    
-    # 1. List all files inside the project-data/ folder
-    response = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=prefix)
-    
-    if 'Contents' in response:
-        for obj in response['Contents']:
-            object_key = obj['Key']
-            
-            # 2. Copy the file over itself with the new storage tier
-            s3_client.copy_object(
-                Bucket=BUCKET_NAME,
-                Key=object_key,
-                CopySource={'Bucket': BUCKET_NAME, 'Key': object_key},
-                StorageClass=target_tier
-            )
-            print(f"Successfully transitioned {object_key} to {target_tier}")
+        # Get the target storage class from Daivik's logic
+        target_tier = decide_storage_class(days_ago, count_30d)
+        print(f"Decision for {prefix}: Move to {target_tier}")
+        
+        # 3. Execute the S3 move (you will connect the actual mover logic here)
+    copy_object_to_tier(prefix, target_tier)
+        
+    return {
+        'statusCode': 200,
+        'body': f"Successfully processed {len(real_metrics)} prefixes."
+    }
